@@ -154,5 +154,5 @@ dotnet publish src/SafeDiskCleaner/SafeDiskCleaner.csproj -c Release -r win-x64 
 
 Every push builds, tests, publishes and smoke-tests the app on GitHub Actions
 (`.github/workflows/build.yml`) and uploads `SafeDiskCleaner-win-x64.zip` as an artifact.
-Pushing a `v*` tag runs `release.yml`, which attaches the same zip to a **draft** release
-for the owner to review and publish.
+Pushing a `v*` tag runs `release.yml`, which runs the same build and publishes a release
+with the zip and its SHA-256 checksum.
