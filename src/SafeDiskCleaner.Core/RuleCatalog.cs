@@ -34,18 +34,36 @@ public static partial class RuleCatalog
         rules.AddRange(
         [
             new("temp", RuleGroup.Leftovers, "Old temp files",
-                "Temp files and crash dumps untouched for a week, plus old agent and LibreOffice scratch.", TempFiles),
+                "Temp files, crash dumps and error reports untouched for a week, plus old agent and LibreOffice scratch.", TempFiles),
+            new("thumbnails", RuleGroup.Leftovers, "Thumbnail cache",
+                "Picture previews Explorer saved. It redraws them as you browse.", Thumbnails),
+            new("inet-cache", RuleGroup.Leftovers, "Internet cache files",
+                "Windows' own web cache, used by older apps and Office.", InetCache),
             new("partial", RuleGroup.Leftovers, "Unfinished downloads",
                 "Partial downloads (.crdownload, .part) left in Downloads or Desktop for 2+ days.", Partial),
             new("node-modules", RuleGroup.Leftovers, "Idle node_modules",
                 "Dependencies of projects untouched for 30 days. npm install brings them back.", NodeModules),
             new("recycle", RuleGroup.YourCall, "Recycle Bin", "Empties it for good.", Recycle),
+            new("shader-cache", RuleGroup.YourCall, "DirectX shader cache",
+                "Games rebuild it, but stutter for a while after.", ShaderCache),
+            new("memory-dump", RuleGroup.YourCall, "Blue-screen memory dump",
+                "Full crash dump. Keep it while you are still fixing crashes.", MemoryDump, admin: true),
             new("win-temp", RuleGroup.Windows, "Windows temp and update leftovers",
                 "Windows Temp, old Windows Update downloads and error reports.", WinTemp, admin: true),
             new("delivery-opt", RuleGroup.Windows, "Delivery Optimization cache",
                 "Update pieces Windows keeps to share with other PCs.", DeliveryOpt, admin: true),
-            new("dism", RuleGroup.Windows, "Windows component store",
-                "Removes superseded Windows update files. Slow; run now and then.", ComponentStore, isChecked: false, admin: true),
+            new("win-logs", RuleGroup.Windows, "Old Windows log files",
+                "Logs Windows wrote more than a week ago, plus its system temp folder. Folders stay.", WinLogs, admin: true),
+            new("win-diag", RuleGroup.Windows, "Windows diagnostic leftovers",
+                "Feedback Hub archives, old setup logs, Defender's non-critical files, ChkDsk fragments.", WinDiag, admin: true),
+            new("win-update", RuleGroup.Windows, "Windows Update cleanup",
+                "Superseded update files and setup leftovers, removed by Windows' own Disk Cleanup. Size shows after the run.", WinUpdate, admin: true),
+            new("old-drivers", RuleGroup.Windows, "Old driver versions",
+                "Older copies of drivers a newer version replaced. You can't roll those drivers back after.", OldDrivers, isChecked: false, admin: true),
+            new("win-old", RuleGroup.Windows, "Previous Windows installation",
+                "Lets you go back to your old Windows for 10 days after an upgrade.", WinOld, isChecked: false, admin: true),
+            new("win-esd", RuleGroup.Windows, "Windows installation files",
+                "Needed for Reset this PC without a download. Keep unless space is desperate.", WinEsd, isChecked: false, admin: true),
         ]);
         return rules;
     }
@@ -357,6 +375,36 @@ public static partial class RuleCatalog
                 yield return new Item(f);
             }
         }
+        // the user's own Windows Error Reporting folders (ReportArchive, ReportQueue)
+        foreach (string d in G(Local, "Microsoft", "Windows", "WER", "*", "*"))
+        {
+            if (IdleDays(d, deep: true) > 7)
+            {
+                string n = Path.GetFileName(d);
+                yield return new Item(d, $"error report {n[..Math.Min(40, n.Length)]}");
+            }
+        }
+    }
+
+    internal static IEnumerable<Item> Thumbnails(ScanContext ctx, Rule r)
+    {
+        foreach (string f in G(Local, "Microsoft", "Windows", "Explorer", "thumbcache_*.db"))
+        {
+            yield return new Item(f, $"Explorer {Path.GetFileName(f)}");
+        }
+    }
+
+    /// <summary>Only the IE cache buckets, never Content.Outlook (it can hold the only copy of an edited attachment).</summary>
+    internal static IEnumerable<Item> InetCache(ScanContext ctx, Rule r)
+    {
+        string b = Path.Combine(Local, "Microsoft", "Windows", "INetCache");
+        foreach (string d in G(b, "IE", "*").Concat(G(b, "Low", "IE", "*")))
+        {
+            if (Directory.Exists(d))
+            {
+                yield return new Item(d, "Internet cache " + Path.GetRelativePath(b, d));
+            }
+        }
     }
 
     private static readonly string[] WalkSkip = [".git", "node_modules", "AppData", ".venv", "venv"];
@@ -512,17 +560,188 @@ public static partial class RuleCatalog
         }
     }
 
-    internal static IEnumerable<Item> ComponentStore(ScanContext ctx, Rule r)
+    /// <summary>Files under <paramref name="baseDir"/> untouched for <paramref name="days"/>. Folders stay, so the services that write them still find them.</summary>
+    internal static IEnumerable<string> OldFiles(string baseDir, int days, params string[] skipDirs)
     {
-        yield return new Item("Windows component store cleanup (DISM, takes 10+ minutes)", () =>
+        var stack = new Stack<string>();
+        stack.Push(baseDir);
+        while (stack.Count > 0)
         {
-            (int code, string output) = Tools.RunHidden(Tools.System32("dism.exe"),
-                "/Online /Cleanup-Image /StartComponentCleanup", TimeSpan.FromMinutes(60));
-            if (code != 0)
+            string d = stack.Pop();
+            List<FileSystemInfo> entries;
+            try
             {
-                throw new InvalidOperationException($"DISM exited with code {code}.");
+                entries = new DirectoryInfo(d).EnumerateFileSystemInfos("*", DirOptions).ToList();
             }
-        }, null);
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                continue;
+            }
+            foreach (FileSystemInfo e in entries)
+            {
+                if (e is DirectoryInfo)
+                {
+                    if (!skipDirs.Contains(e.Name, StringComparer.OrdinalIgnoreCase))
+                    {
+                        stack.Push(e.FullName);
+                    }
+                }
+                else if (DaysSince(e.LastWriteTimeUtc) > days)
+                {
+                    yield return e.FullName;
+                }
+            }
+        }
+    }
+
+    internal static IEnumerable<Item> WinLogs(ScanContext ctx, Rule r)
+    {
+        // Measured-boot logs back TPM health checks and SystemRestore logs explain restore points: kept to be safe.
+        foreach (string b in new[] { Path.Combine(Win, "Logs"), Path.Combine(Win, "System32", "LogFiles") })
+        {
+            foreach (string p in OldFiles(b, 7, "MeasuredBoot", "SystemRestore"))
+            {
+                yield return new Item(p, Path.GetRelativePath(Win, p));
+            }
+        }
+        foreach (string b in new[]
+        {
+            Path.Combine(Win, "SystemTemp"), Path.Combine(PD, "Microsoft", "WDF"), Path.Combine(PD, "Microsoft", "Windows", "HiveUpload"),
+        })
+        {
+            foreach (string e in G(b, "*"))
+            {
+                if (IdleDays(e, deep: true) > 7)
+                {
+                    yield return new Item(e);
+                }
+            }
+        }
+    }
+
+    internal static IEnumerable<Item> WinDiag(ScanContext ctx, Rule r)
+    {
+        foreach (string b in new[]
+        {
+            Path.Combine(PD, "Microsoft", "Diagnosis", "FeedbackArchive"),
+            Path.Combine(PD, "Microsoft", "Diagnosis", "EventTranscript"),
+            Path.Combine(PD, "Microsoft", "Windows", "RetailDemo"),
+        })
+        {
+            foreach (string e in G(b, "*"))
+            {
+                yield return new Item(e);
+            }
+        }
+        // Defender's non-critical files only; Quarantine is never an allowed root
+        foreach (string b in new[]
+        {
+            Path.Combine(PD, "Microsoft", "Windows Defender", "LocalCopy"),
+            Path.Combine(PD, "Microsoft", "Windows Defender", "Support"),
+        })
+        {
+            foreach (string p in OldFiles(b, 7))
+            {
+                yield return new Item(p, "Defender " + Path.GetRelativePath(Path.GetDirectoryName(b)!, p));
+            }
+        }
+        foreach (string pat in new[] { "setup*.log", "setup*.old", "setuplog.txt", "winnt32.log" })
+        {
+            foreach (string p in G(Win, pat))
+            {
+                if (File.Exists(p) && IdleDays(p) > 30)
+                {
+                    yield return new Item(p);
+                }
+            }
+        }
+        foreach (string d in GuardDefaults.FoundDirs())
+        {
+            foreach (string f in G(d, "*.CHK"))
+            {
+                yield return new Item(f, "old ChkDsk fragment " + Path.GetRelativePath(KnownPaths.SystemDrive, f));
+            }
+        }
+    }
+
+    internal static IEnumerable<Item> ShaderCache(ScanContext ctx, Rule r)
+    {
+        foreach (string e in G(Local, "D3DSCache", "*"))
+        {
+            yield return new Item(e);
+        }
+    }
+
+    /// <summary>Full memory dumps directly in C:\Windows. The Minidump folder stays protected.</summary>
+    internal static IEnumerable<Item> MemoryDump(ScanContext ctx, Rule r)
+    {
+        foreach (string p in G(Win, "*.dmp"))
+        {
+            if (File.Exists(p))
+            {
+                yield return new Item(p, $"{Path.GetFileName(p)} from {File.GetLastWriteTime(p):d MMM yyyy}");
+            }
+        }
+    }
+
+    internal static IEnumerable<Item> WinUpdate(ScanContext ctx, Rule r)
+    {
+        foreach ((string name, string what) in DiskCleanupHandlers.UpdateHandlers)
+        {
+            if (ctx.Handlers.Exists(name))
+            {
+                yield return Item.ForHandler($"{what} ({name})", name);
+            }
+        }
+    }
+
+    internal static IEnumerable<Item> WinOld(ScanContext ctx, Rule r)
+    {
+        string d = Path.Combine(KnownPaths.SystemDrive, "Windows.old");
+        if (Directory.Exists(d) && ctx.Handlers.Exists(DiskCleanupHandlers.PreviousInstallations))
+        {
+            yield return Item.ForHandler("Windows.old, your previous Windows", DiskCleanupHandlers.PreviousInstallations, TreeSize(d));
+        }
+    }
+
+    internal static IEnumerable<Item> WinEsd(ScanContext ctx, Rule r)
+    {
+        List<string> ds = new[] { Path.Combine(KnownPaths.SystemDrive, "ESD"), Path.Combine(KnownPaths.SystemDrive, "$Windows.~WS") }
+            .Where(Directory.Exists).ToList();
+        if (ds.Count > 0 && ctx.Handlers.Exists(DiskCleanupHandlers.EsdFiles))
+        {
+            yield return Item.ForHandler("Windows installation files (ESD)", DiskCleanupHandlers.EsdFiles, ds.Sum(TreeSize));
+        }
+    }
+
+    internal static IEnumerable<Item> OldDrivers(ScanContext ctx, Rule r)
+    {
+        List<DriverPackage>? packages = null;
+        string? error = null;
+        try
+        {
+            packages = ctx.ListDrivers();
+        }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+        }
+        if (packages is null || packages.Count == 0)
+        {
+            r.Skipped.Add(new Skip("driver list", error is null ? "no third-party driver packages found" : $"could not read the driver list: {error}"));
+            yield break;
+        }
+        var (old, skipped) = DriverCleanup.SelectOld(packages, DriverCleanup.InfsInUse());
+        foreach ((DriverPackage p, string why) in skipped)
+        {
+            r.Skipped.Add(new Skip($"{p.OriginalName} {p.Version} ({p.PublishedName})", why));
+        }
+        foreach ((DriverPackage p, VersionKey newest) in old)
+        {
+            string oem = p.PublishedName;
+            yield return new Item($"{p.OriginalName} {p.Version} ({oem}; keeps {newest})", () => DriverCleanup.Delete(oem),
+                DriverCleanup.PackageSize(oem));
+        }
     }
 
     // ------------------------------------------------------------------ helpers

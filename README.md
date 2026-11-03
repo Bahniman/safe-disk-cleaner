@@ -1,8 +1,8 @@
 # Safe Disk Cleaner
 
-A small Windows app that finds old caches and leftovers and clears them, without ever
-touching your installed programs, AI models or your own files. You see exactly what will
-go before anything is deleted.
+A small Windows app that does what Windows Disk Cleanup does, plus the app and browser
+caches Disk Cleanup never sees, without ever touching your installed programs, AI models or
+your own files. You see exactly what will go before anything is deleted.
 
 <!-- Screenshot: replace the line below with ![Safe Disk Cleaner](docs/screenshot.png) once added. -->
 *Screenshot coming soon.*
@@ -15,8 +15,9 @@ go before anything is deleted.
   `C:\NVIDIA` folder a manual install leaves behind). Newer, not-yet-installed drivers stay.
 - Update installers apps downloaded and no longer need, and old app versions that Discord
   and similar apps keep after updating.
-- Temp files nobody has touched for a week, app crash dumps, and unfinished downloads
-  (`.crdownload`, `.part`) older than two days.
+- Temp files nobody has touched for a week, app crash dumps, old error reports, and
+  unfinished downloads (`.crdownload`, `.part`) older than two days.
+- Explorer's thumbnail cache and Windows' own internet cache.
 - Download caches of npm, pip, uv and Yarn, and the `node_modules` folders of projects
   nobody has opened for 30 days (`npm install` brings them back).
 
@@ -25,17 +26,24 @@ Brave, Opera, Firefox, Discord, Teams, Slack, Spotify, VS Code and similar apps,
 Steam, Epic and Ubisoft launcher caches. Your logins, settings, history and downloads stay.
 If an app is open it is skipped, with a note saying so.
 
-**Your call**, not ticked: emptying the Recycle Bin.
+**Your call**, not ticked: emptying the Recycle Bin, the DirectX shader cache (games stutter
+for a while after), and the big blue-screen memory dump (`MEMORY.DMP`, admin).
 
-**Windows**, only when run as admin: Windows' own temp folder, old Windows Update downloads,
-error reports and the Delivery Optimization cache. The slow Windows component store cleanup
-is offered too, unticked.
+**Windows**, only when run as admin, the same things Disk Cleanup's "Clean up system files"
+mode clears: Windows' temp folder, old Windows Update downloads, error reports, the Delivery
+Optimization cache, old Windows log files, diagnostic leftovers (Feedback Hub archives, old
+setup logs, Defender's non-critical files, ChkDsk fragments), and Windows Update cleanup,
+which Windows' own Disk Cleanup does for the app and can take 10+ minutes. Not ticked unless
+you choose: old driver versions, your previous Windows installation (Windows.old) and the
+Windows installation files that Reset this PC uses.
 
 ## What it never touches
 
 Installed programs and command-line tools, anything on your PATH, local AI models (Ollama,
-LM Studio, Hugging Face), game shader caches, OneDrive and other synced folders, your
-Documents, Pictures, Music, Videos and game saves, and browser logins and history. The list
+LM Studio, Hugging Face), NVIDIA and AMD game shader caches, Windows minidumps, OneDrive and
+other synced folders, your Downloads folder and File History backups (Disk Cleanup offers
+both; this app never touches them), your Documents, Pictures, Music, Videos and game saves,
+and browser logins and history. The list
 at the bottom of the app, "Kept on purpose", shows this too.
 
 Why so strict? This tool started after a manual cleanup deleted

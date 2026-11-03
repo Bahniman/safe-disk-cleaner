@@ -14,4 +14,9 @@
     <InternalsVisibleTo Include="SafeDiskCleaner.Core.Tests" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Managed wrapper for the Windows DISM API (MIT), used to list driver packages language-neutrally. -->
+    <PackageReference Include="Microsoft.Dism" Version="6.1.0" />
+  </ItemGroup>
+
 </Project>

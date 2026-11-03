@@ -83,10 +83,11 @@ public static class Scanner
             r.Items.Add(it);
         }
 
-        Parallel.ForEach(r.Items.Where(i => i.Action is null && i.Size is null),
+        Parallel.ForEach(r.Items.Where(i => i.Path is not null && i.Size is null),
             new ParallelOptions { MaxDegreeOfParallelism = 4 },
             it => it.Size = PathUtil.TreeSize(it.Path!));
-        r.Items.RemoveAll(it => it.Action is null && (it.Size ?? 0) == 0);
+        // path-less items (actions, Windows' handlers) stay even when their size is unknown
+        r.Items.RemoveAll(it => it.Path is not null && (it.Size ?? 0) == 0);
     }
 
     /// <summary>A folder found by two rules is kept by the first one only, so totals are not counted twice.</summary>

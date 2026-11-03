@@ -27,12 +27,15 @@ public static class RuleGroups
         RuleGroup.Leftovers => "Nothing uses these any more",
         RuleGroup.Apps => "Logins and settings stay. An open app is skipped.",
         RuleGroup.YourCall => "Unchecked until you tick them",
-        RuleGroup.Windows => admin ? "Windows' own leftovers" : "Restart as admin to scan these",
+        RuleGroup.Windows => admin ? "What Disk Cleanup's system-file mode clears" : "Restart as admin to scan these",
         _ => "",
     };
 }
 
-/// <summary>One thing to delete: a path (checked by the guard) or an action such as emptying the Recycle Bin.</summary>
+/// <summary>
+/// One thing to delete: a path (checked by the guard), an action such as emptying the Recycle Bin,
+/// or a Disk Cleanup category that Windows' own handler removes (<see cref="Handler"/>).
+/// </summary>
 public sealed class Item
 {
     public Item(string path, string? label = null, long? size = null)
@@ -48,6 +51,19 @@ public sealed class Item
         Action = action;
         Size = size;
     }
+
+    /// <summary>A Disk Cleanup category (a VolumeCaches subkey name) that Windows' own handler removes.</summary>
+    public static Item ForHandler(string label, string handler, long? size = null) => new(label, size, handler);
+
+    private Item(string label, long? size, string handler)
+    {
+        Label = label;
+        Handler = handler;
+        Size = size;
+    }
+
+    /// <summary>Set for a Disk Cleanup category run by cleanmgr in one pass at the end of Clean.</summary>
+    public string? Handler { get; }
 
     public string? Path { get; }
 
@@ -122,13 +138,22 @@ public sealed class ScanContext
 {
     private readonly Lazy<VersionKey?> _nvidiaDriver;
 
-    public ScanContext(ProcessSnapshot processes, Func<VersionKey?>? nvidiaDriver = null)
+    public ScanContext(ProcessSnapshot processes, Func<VersionKey?>? nvidiaDriver = null,
+        DiskCleanupHandlers? handlers = null, Func<List<DriverPackage>>? listDrivers = null)
     {
         Processes = processes;
         _nvidiaDriver = new Lazy<VersionKey?>(nvidiaDriver ?? Tools.NvidiaDriverVersion, LazyThreadSafetyMode.ExecutionAndPublication);
+        Handlers = handlers ?? DiskCleanupHandlers.ForThisPc();
+        ListDrivers = listDrivers ?? DriverCleanup.ListThirdParty;
     }
 
     public ProcessSnapshot Processes { get; }
+
+    /// <summary>Windows' own Disk Cleanup handlers (real registry in the app, a fake in tests).</summary>
+    public DiskCleanupHandlers Handlers { get; }
+
+    /// <summary>Third-party driver packages (the DISM API in the app).</summary>
+    public Func<List<DriverPackage>> ListDrivers { get; }
 
     public VersionKey? NvidiaDriver => _nvidiaDriver.Value;
 

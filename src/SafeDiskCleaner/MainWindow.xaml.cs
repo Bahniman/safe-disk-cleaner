@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Diagnostics;
+using Microsoft.UI.Composition.SystemBackdrops;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Automation;
@@ -31,8 +32,9 @@ public sealed partial class MainWindow : Window
     {
         InitializeComponent();
 
-        // Windows 11 look: Mica, content drawn into the title bar, system caption buttons.
-        SystemBackdrop = new MicaBackdrop();
+        // Windows 11 look: Mica (the stronger BaseAlt tint, so the cards stand out), content drawn
+        // into the title bar, system caption buttons. Every layer above it is transparent.
+        SystemBackdrop = new MicaBackdrop { Kind = MicaKind.BaseAlt };
         ExtendsContentIntoTitleBar = true;
         SetTitleBar(AppTitleBar);
         AppWindow.TitleBar.PreferredHeightOption = TitleBarHeightOption.Tall;
@@ -125,9 +127,9 @@ public sealed partial class MainWindow : Window
         int count = pick.Sum(r => r.Items.Count);
         long bytes = pick.Sum(r => r.Total);
         string text = $"Delete {count} item{(count == 1 ? "" : "s")}, about {Fmt(bytes)}? This can't be undone.";
-        if (pick.Any(r => r.Id == "dism"))
+        if (pick.Any(r => r.Items.Any(i => i.Handler is not null)))
         {
-            text += "\n\nThe Windows component store cleanup can take 10 minutes or more.";
+            text += "\n\nWindows' own Disk Cleanup runs too and can take 10+ minutes.";
         }
         var dialog = new ContentDialog
         {
@@ -378,12 +380,6 @@ public sealed partial class MainWindow : Window
             lines.Children.Add(new TextBlock { Text = k.Why, Style = Res<Style>("MutedCaptionStyle"), TextWrapping = TextWrapping.Wrap });
             Place(row, new FontIcon { Glyph = "\uE72E", FontSize = 14, VerticalAlignment = VerticalAlignment.Center }, 0);
             Place(row, lines, 1);
-            if (k.OpensStorageSettings)
-            {
-                var link = new HyperlinkButton { Content = "Open storage settings", VerticalAlignment = VerticalAlignment.Center };
-                link.Click += StorageSettings_Click;
-                Place(row, link, 2);
-            }
             rows.Children.Add(row);
         }
 
@@ -486,7 +482,7 @@ public sealed partial class MainWindow : Window
             }
             string label = it.Label.Trim();
             string? path = it.Path is not null && !string.Equals(it.Path, it.Label, StringComparison.Ordinal) ? it.Path : null;
-            AddDetailLine(label, path, it.Size is null ? "—" : Fmt(it.Size));
+            AddDetailLine(label, path, it.Size is null ? "after the run" : Fmt(it.Size));
         }
         if (r.Skipped.Count > 0)
         {
@@ -779,7 +775,7 @@ public sealed partial class MainWindow : Window
         }
         if (r.Total == 0)
         {
-            return r.HasUnknownSize ? "—" : "";
+            return r.HasUnknownSize ? "Size shows after the run" : "";
         }
         return Fmt(r.Total) + (r.HasUnknownSize ? " +" : "");
     }

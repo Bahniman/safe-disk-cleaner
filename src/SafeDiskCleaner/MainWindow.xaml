@@ -5,7 +5,8 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     Title="Safe Disk Cleaner">
 
-    <Grid x:Name="RootGrid">
+    <!-- Transparent all the way down so the Mica backdrop shows through. -->
+    <Grid x:Name="RootGrid" Background="Transparent">
         <Grid.RowDefinitions>
             <RowDefinition Height="48" />
             <RowDefinition Height="Auto" />
@@ -15,7 +16,7 @@
         </Grid.RowDefinitions>
 
         <!-- Custom title bar: icon and name; the caption buttons are drawn by Windows. -->
-        <Grid x:Name="AppTitleBar" Grid.Row="0" Height="48" Padding="16,0,0,0">
+        <Grid x:Name="AppTitleBar" Grid.Row="0" Height="48" Padding="16,0,0,0" Background="Transparent">
             <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Spacing="12">
                 <Image x:Name="TitleBarIcon" Width="16" Height="16" VerticalAlignment="Center" />
                 <TextBlock x:Name="TitleBarText"
@@ -33,7 +34,10 @@
             </Grid.ColumnDefinitions>
             <StackPanel Spacing="4" VerticalAlignment="Center">
                 <TextBlock Text="Safe Disk Cleaner" Style="{StaticResource TitleTextBlockStyle}" />
-                <TextBlock Text="Clears caches and leftovers. Installed tools, models and your files are never touched."
+                <TextBlock Text="Covers what Windows Disk Cleanup does, plus app caches it never sees."
+                           Style="{StaticResource MutedBodyStyle}"
+                           TextWrapping="Wrap" />
+                <TextBlock Text="Installed tools, models and your files are never touched."
                            Style="{StaticResource MutedBodyStyle}"
                            TextWrapping="Wrap" />
             </StackPanel>

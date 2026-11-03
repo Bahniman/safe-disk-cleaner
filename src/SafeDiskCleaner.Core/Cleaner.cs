@@ -23,15 +23,25 @@ public static class Cleaner
     /// it is deleted, with a guard rebuilt now (so a program installed since the scan still counts),
     /// and a rule whose app has been opened since the scan is skipped.
     /// </summary>
+    /// <param name="handlers">Windows' own Disk Cleanup handlers; the real ones unless a test passes a fake.</param>
+    /// <param name="admin">Elevation now; read from the process unless a test passes it.</param>
     public static CleanResult Clean(IReadOnlyList<Rule> rules, IProgress<CleanProgress>? progress = null,
-        bool dryRun = false, Guard? guard = null, string? logFile = null)
+        bool dryRun = false, Guard? guard = null, string? logFile = null,
+        DiskCleanupHandlers? handlers = null, bool? admin = null)
     {
         guard ??= Guard.CreateDefault();
+        bool isAdmin = admin ?? Tools.IsAdmin();
         ProcessSnapshot processes = ProcessSnapshot.Take();
         var work = rules.Where(r => r.CanClean).SelectMany(r => r.Items.Select(it => (Rule: r, Item: it))).ToList();
-        var busy = rules.ToDictionary(r => r, r => r.Busy?.Invoke(processes));
+        // an admin rule is skipped, never half-run, if the app is not elevated now
+        var busy = rules.ToDictionary(r => r, r => r.NeedsAdmin && !isAdmin ? Scanner.NeedsAdmin : r.Busy?.Invoke(processes));
+        // Disk Cleanup categories run together in one cleanmgr pass after everything else
+        var handlerWork = work.Where(w => w.Item.Handler is not null).ToList();
+        work = work.Where(w => w.Item.Handler is null).ToList();
+        int total = work.Count + (handlerWork.Count > 0 ? 1 : 0);
 
-        List<string> drives = DrivesToMeasure(work.Select(w => w.Item));
+        List<string> drives = DrivesToMeasure(work.Concat(handlerWork).Select(w => w.Item));
+
         Dictionary<string, long?> before = drives.ToDictionary(d => d, Tools.FreeBytes);
 
         var rows = new List<LogRow>();
@@ -39,7 +49,7 @@ public static class Cleaner
         for (int n = 0; n < work.Count; n++)
         {
             (Rule r, Item it) = work[n];
-            progress?.Report(new CleanProgress(n, work.Count, it.Label));
+            progress?.Report(new CleanProgress(n, total, it.Label));
             if (dryRun)
             {
                 it.Result = "dry run";
@@ -54,6 +64,10 @@ public static class Cleaner
                 {
                     it.Action();
                     it.Result = "done";
+                }
+                catch (KeptByWindowsException ex)
+                {
+                    it.Result = ex.Message;
                 }
                 catch (Exception ex)
                 {
@@ -70,7 +84,37 @@ public static class Cleaner
             }
             rows.Add(new LogRow(DateTime.Now, r.Id, it.Path ?? it.Label, it.Size ?? 0, it.Result));
         }
-        progress?.Report(new CleanProgress(work.Count, work.Count, ""));
+        if (handlerWork.Count > 0)
+        {
+            progress?.Report(new CleanProgress(work.Count, total, "Windows Disk Cleanup is running (Update Cleanup can take 10+ minutes)"));
+            var runnable = handlerWork.Where(w => busy[w.Rule] is null).ToList();
+            string result = "dry run";
+            if (!dryRun)
+            {
+                try
+                {
+                    if (runnable.Count > 0)
+                    {
+                        (handlers ?? DiskCleanupHandlers.ForThisPc()).Run(runnable.Select(w => w.Item.Handler!));
+                    }
+                    result = "done by Windows";
+                }
+                catch (Exception ex)
+                {
+                    result = $"failed: {ex.Message}";
+                }
+            }
+            foreach ((Rule r, Item it) in handlerWork)
+            {
+                it.Result = busy[r] is string why && !dryRun ? $"skipped: {why}" : result;
+                if (it.Result is not ("done by Windows" or "dry run"))
+                {
+                    problems++;
+                }
+                rows.Add(new LogRow(DateTime.Now, r.Id, it.Label, it.Size ?? 0, it.Result));
+            }
+        }
+        progress?.Report(new CleanProgress(total, total, ""));
 
         long freed = 0;
         foreach (string d in drives)
@@ -94,7 +138,7 @@ public static class Cleaner
                 RunLog.WriteError("Could not write runs.csv: " + ex.Message);
             }
         }
-        return new CleanResult { Freed = freed, Items = work.Count, Problems = problems, Logged = logged };
+        return new CleanResult { Freed = freed, Items = work.Count + handlerWork.Count, Problems = problems, Logged = logged };
     }
 
     /// <summary>Re-checks with the guard, deletes, and describes what happened.</summary>
