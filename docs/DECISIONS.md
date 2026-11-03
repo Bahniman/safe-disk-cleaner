@@ -157,14 +157,13 @@ Every difference makes the app more careful, not less:
 
 ## Versions
 
-- **.NET 8**, as the spec asks. Note that .NET 8 support ends on 10 November 2026. The app is
-  self-contained, so it keeps working, but it stops getting runtime security fixes. Moving to
-  .NET 10 (LTS) is a one-line change of `TargetFramework` in the three project files plus
-  `global.json`, and is worth doing before a public release.
-- **Windows App SDK 1.8.260921001**, the newest stable 1.x on NuGet when this was built, as
-  the spec asks ("latest stable 1.x"). NuGet also has a 2.x line (2.6.5 was published the
-  same day this was built). Moving to it is a small change in
-  `src/SafeDiskCleaner/SafeDiskCleaner.csproj`, but it should be tested on a real PC first.
+- **.NET 10 (LTS)**. The first build used .NET 8 as the spec asked, but .NET 8 support ends on
+  10 November 2026, so the owner chose to move to .NET 10 before any release. The app is
+  self-contained, so friends still need nothing installed.
+- **Windows App SDK 2.6.5**, the current stable release on NuGet when this was built. The first
+  build used 1.8.260921001 (the spec said "latest stable 1.x"); the owner chose to move to the
+  2.x line. The app's code compiled unchanged against 2.6.5. Note that 2.6.5 was published the
+  same day this was built; if it misbehaves on a real PC, 2.6.4 is the previous release.
 - **Download size**: the zip is about 88 MB (about 215 MB unzipped), almost all of it the
   bundled .NET and Windows App SDK runtimes, which is what lets it run on a PC with nothing
   installed. The self-contained Windows App SDK copies its whole runtime, including Windows
