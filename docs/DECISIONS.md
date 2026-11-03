@@ -120,11 +120,13 @@ Every difference makes the app more careful, not less:
   the spec asks ("latest stable 1.x"). NuGet also has a 2.x line (2.6.5 was published the
   same day this was built). Moving to it is a small change in
   `src/SafeDiskCleaner/SafeDiskCleaner.csproj`, but it should be tested on a real PC first.
-- **Component packages instead of the metapackage**: the app references the Windows App SDK
-  components it uses (Runtime, Foundation, InteractiveExperiences, WinUI, DWrite) at the
-  exact versions the 1.8.260921001 metapackage pins. Windows ML (`onnxruntime.dll`,
-  `DirectML.dll`), Windows AI and Widgets are left out, which keeps about 45 MB of unused
-  files out of the download. The csproj says how to switch back.
+- **Download size**: the zip is about 88 MB (about 215 MB unzipped), almost all of it the
+  bundled .NET and Windows App SDK runtimes, which is what lets it run on a PC with nothing
+  installed. The self-contained Windows App SDK copies its whole runtime, including Windows
+  ML (`onnxruntime.dll`, `DirectML.dll`, about 40 MB) that this app never uses. Referencing
+  only the WinUI, Foundation and related component packages was tried and did not drop
+  them, so the app uses the standard metapackage. Trimming would need hand-deleting runtime
+  files, which is not worth the risk of a broken install.
 
 ## Not verified
 
