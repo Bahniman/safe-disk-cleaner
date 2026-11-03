@@ -1,0 +1,10 @@
+bin/
+obj/
+.vs/
+*.user
+*.suo
+publish/
+artifacts/
+*.zip
+__pycache__/
+TestResults/
