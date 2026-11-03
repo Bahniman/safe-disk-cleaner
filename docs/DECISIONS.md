@@ -40,7 +40,7 @@ A short look at what established tools clean, to find gaps worth filling:
 | Brave, Opera / Opera GX, Slack, Teams (new), Spotify, Cursor, Windsurf web and GPU caches | yes | 100 MB to 1 GB+ each | Chromium recreates its HTTP, code and GPU caches ([Chromium disk cache](https://www.chromium.org/developers/design-documents/network-stack/disk-cache/)); Microsoft documents clearing the new Teams cache ([Learn](https://learn.microsoft.com/troubleshoot/microsoftteams/teams-administration/clear-teams-cache)) | "Web and GPU cache folders; logins and settings stay." |
 | Firefox disk cache (`cache2` in the Local profile folder) | yes | up to about 1 GB | Firefox keeps the cache apart from personal data and rebuilds it ([profiles](https://support.mozilla.org/kb/profiles-where-firefox-stores-user-data), [clear cache](https://support.mozilla.org/kb/how-clear-firefox-cache)) | "Firefox's web cache; pages load a bit slower once." |
 | NVIDIA manual-install copies in `C:\NVIDIA\DisplayDriver\<version>` | yes, for anyone who installs drivers from nvidia.com | about 1 GB per version | Only used during setup; running the downloaded installer again recreates them ([TweakGuides](https://xjdhdr.gitlab.io/tweakguides/system_guides/NVFORCE/NVFORCE_4.xhtml)) | "Unpacked copies of NVIDIA drivers that are already installed." |
-| "Open Windows storage settings" link | n/a | n/a | n/a | For Windows.old and previous updates, which Windows removes better itself. |
+| "Windows storage settings" in the overflow menu | n/a | n/a | n/a | One click to Settings > System > Storage. |
 | "Last cleaned 12 days ago, freed 1.5 GB" line | n/a | n/a | read from `runs.csv` | |
 
 The app-cache additions use the same signature check as the reference (`IsChromiumCache`), so
@@ -54,23 +54,24 @@ exactly like a version, and only after a day without changes.
 | Idea | Why not |
 |---|---|
 | AMD driver leftovers (`C:\AMD`) | AMD community reports that recent chipset drivers keep their uninstaller in `C:\AMD`, so deleting it can leave a driver that cannot be uninstalled. There is no primary source for which subfolders are safe, and no AMD PC was available to check folder names or where the installed version is recorded. Worth revisiting with an AMD machine to test on. AMD's shader caches (`%LOCALAPPDATA%\AMD`) are protected. |
-| Windows.old / previous Windows installation | Owned by TrustedInstaller, removed by Windows itself after the rollback period, and Settings does it properly. The app links to Settings > System > Storage instead. |
-| Windows Update cleanup (WinSxS) by hand | Only safe through DISM; offered as the off-by-default "Windows component store" item. |
-| DirectX, NVIDIA, AMD and Steam shader caches | Games stutter while they rebuild. Protected and listed under "Kept on purpose". |
+| Windows Update cleanup (WinSxS) by hand | Never by hand. Windows' own "Update Cleanup" handler does it (see Disk Cleanup parity). |
+| NVIDIA, AMD and Steam shader caches | Games stutter while they rebuild. Protected and listed under "Kept on purpose". The DirectX one is an opt-in rule, as in Disk Cleanup. |
 | Steam partial downloads (`steamapps\downloading`) | May be resumed; Steam manages them. |
-| Thumbnail cache | Locked by Explorer while it runs, usually small, and folders open slowly while it rebuilds. |
-| Temporary Internet Files / INetCache | Small since Internet Explorer retired, and `Content.Outlook` can hold the only copy of an attachment someone opened and edited. |
+| INetCache outside the `IE` buckets | `Content.Outlook` can hold the only copy of an attachment someone opened and edited. Only `INetCache\IE` and `INetCache\Low\IE` are cleared. |
 | Prefetch | Windows manages it; clearing it slows the next app launches and boot. A classic "optimiser" myth. |
 | Browser cookies, history, sessions, saved logins | Personal data; clearing it signs people out. |
 | Chat history (Claude Code transcripts, Discord, and so on) | Personal data, and Claude Code already expires its own transcripts (spec). |
 | Spotify song cache and offline downloads | Mixed with offline music; Spotify's own Settings > Storage > Clear cache is the safe route. Only Spotify's embedded browser cache is cleared. |
 | WhatsApp desktop | No reliable source on its folder layout; media may sit next to caches. |
 | Hibernation file, page file, System Restore points | System settings and safety nets, not caches. |
-| Event logs and log files | Needed to diagnose problems, and small. |
+| Windows event logs (`.evtx`) | Needed to diagnose problems. Old text logs in `Windows\Logs` are cleared instead, as Disk Cleanup does. |
 | Windows Installer cache, Package Cache | Deleting them breaks repair and uninstall. Protected. |
 | NVIDIA `Installer2` under Program Files | Users report that deleting it breaks uninstalling NVIDIA software. |
 | Microsoft Store cache (`wsreset`) | Small, and Windows has its own tool. |
-| Language resource files | Removing them can break a language people use; small. |
+| Language files by hand | Only Windows' own "Language Pack" handler removes them, so a language someone uses is never broken. |
+| Disk Cleanup's "Downloads" and "User file versions" | They empty the Downloads folder and File History backups: personal files. Listed under "Kept on purpose". |
+| System error minidump files | Needed to diagnose blue screens; the Minidump folder stays protected. Only the single full `MEMORY.DMP` is offered, opt-in. |
+| Defender `Quarantine` and scan history | Quarantine holds files Defender may need to restore. Only `LocalCopy` and `Support` files idle 7+ days are cleared, as the spec says. |
 | Battle.net, EA app, Riot caches | Outside the allowed roots (ProgramData) or no citable source on what is safe. |
 | Epic `VaultCache` | Unreal Engine marketplace assets; developers only. |
 | Teams classic | Retired by Microsoft. |
@@ -78,6 +79,50 @@ exactly like a version, and only after a day without changes.
 | Intel driver extraction (`C:\Intel`) | Rare now, and no version to gate on. |
 | Old files in Downloads | Personal files. Storage Sense can do this if someone opts in. |
 | Registry cleaning, "optimisers", startup manager, disk-usage tree map, duplicate finder, scheduling, auto-updates, telemetry | Out of scope by design: one window, one scan, one Clean button. |
+
+## Disk Cleanup parity (spec update, Nov 2026)
+
+The owner asked for the app to do everything Windows Disk Cleanup does as admin, and keep
+clearing the app caches it never sees. `reference/engine.py` (commit d39bc01) and the
+"Disk Cleanup parity" section of `docs/SPEC.md` are what the C# follows.
+
+- **File-based categories are the app's own rules**, so the guard checks every path and sizes
+  are real: thumbnail cache, the `INetCache\IE` buckets, user error reports, old text logs in
+  `Windows\Logs` and `System32\LogFiles` (files only, folders stay, `MeasuredBoot` and
+  `SystemRestore` skipped), `SystemTemp`, WDF and HiveUpload, Feedback Hub and diagnostic data
+  archives, RetailDemo content, Defender's `LocalCopy` and `Support` files, old setup logs in
+  `C:\Windows` and `*.CHK` files in `C:\FOUND.000` to `.009`. The new folders are allowed
+  roots, so each root itself is never deleted.
+- **Loose files in `C:\Windows`** pass only through `ALLOWED_FILES`, matched on the file name
+  of a file directly in that folder. `C:\Windows\Minidump\x.dmp` and `C:\Windows\explorer.exe`
+  never match. There is no bypass: these files still go through every other guard check.
+- **Windows' own handlers** for what only Windows can remove safely (component store, setup
+  leftovers, Windows.old, ESD files): the app clears every `StateFlags0777` value under
+  `VolumeCaches`, sets it only on the ticked categories this PC has, runs
+  `cleanmgr /sagerun:777` once at the end of Clean, and clears the values again in a
+  `finally`. The runner sits behind an interface and is tested with a fake registry.
+  Windows.old and ESD files are off by default (rollback and Reset this PC need them).
+- **Old driver versions** (off by default): listed with the DISM API through the
+  `Microsoft.Dism` NuGet package (MIT), because `pnputil /enum-drivers` prints English-only
+  labels and would find nothing on other languages. Grouped by original INF plus provider; the
+  newest version and any tie stay; packages a device uses now are skipped; deleted with
+  `pnputil /delete-driver` and never `/force`, so Windows refuses anything still in use
+  ("Windows kept it").
+- **Opt-in, in "Your call"**: the DirectX shader cache (leaves the protected list) and the
+  full blue-screen dump `C:\Windows\MEMORY.DMP` (admin). Minidumps stay protected.
+- **Left out**, as the spec says: Disk Cleanup's Downloads and "User file versions"
+  categories, both listed under Kept on purpose.
+- **Admin rules** are blocked with "needs admin" when the app is not elevated, at scan time
+  and again at clean time, so a clean never runs half a Windows rule.
+
+## The look
+
+The first build looked flat on a real PC. The window now uses `MicaBackdrop` with
+`Kind = MicaKind.BaseAlt` (a stronger tint than the default, so cards stand out), the root grid
+and the title bar are explicitly transparent so the backdrop shows through, and the cards use
+the theme's `CardBackgroundFillColorDefaultBrush` and `CardStrokeColorDefaultBrush`
+(the `Expander` cards use them by default; the details pane sets them in `CardStyle`). Light
+and dark follow Windows, the accent colour comes from the system, and there is no Acrylic.
 
 ## Where the C# port differs from the reference
 

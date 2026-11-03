@@ -151,9 +151,9 @@ public class EngineTests
         Assert.False(recycle.DefaultChecked);
         Assert.Equal(RuleGroup.YourCall, recycle.Group);
 
-        Rule dism = rules.Single(r => r.Id == "dism");
-        Assert.False(dism.DefaultChecked);
-        Assert.True(dism.NeedsAdmin);
+        Rule drivers = rules.Single(r => r.Id == "old-drivers");
+        Assert.False(drivers.DefaultChecked);
+        Assert.True(drivers.NeedsAdmin);
 
         Assert.All(rules.Where(r => r.Group == RuleGroup.Windows), r => Assert.True(r.NeedsAdmin));
         Assert.All(rules.Where(r => r.Group == RuleGroup.Apps), r => Assert.NotNull(r.Busy));
