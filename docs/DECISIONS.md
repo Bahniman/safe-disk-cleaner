@@ -115,6 +115,26 @@ clearing the app caches it never sees. `reference/engine.py` (commit d39bc01) an
 - **Admin rules** are blocked with "needs admin" when the app is not elevated, at scan time
   and again at clean time, so a clean never runs half a Windows rule.
 
+## Microsoft PC Manager comparison (Nov 2026)
+
+The owner asked whether the app should take on what Microsoft PC Manager cleans. Microsoft
+publishes no official list, so this compares against reviews and Microsoft Q&A
+([Q&A on being logged out](https://learn.microsoft.com/en-us/answers/questions/3916755/pc-manager-logs-me-out-of-many-of-my-saved-website),
+[review](https://windowsforum.com/news/microsoft-pc-manager-review-one-click-cleanup-to-speed-windows.397082/),
+[Files Cleanup](https://windowsreport.com/microsoft-pc-manager-has-a-new-files-cleanup-feature-for-your-device/)).
+Nothing new passes the four tests, so nothing was added.
+
+| PC Manager | This app |
+|---|---|
+| Deep cleanup: Windows Update files, Delivery Optimization, Recycle Bin, temp files, Windows logs, error reports, thumbnails, DirectX shader cache, Defender files, memory dumps | Already covered (Disk Cleanup parity), with the guard and real sizes; the risky ones are opt-in |
+| Deep cleanup: browser and app caches (Edge, Chrome, Slack and others) | Already covered by the Chromium and Firefox cache rules, for more apps |
+| Deep cleanup: "Computer Usage Traces" (sessions, cookies, history) | Rejected: personal data. Microsoft's own Q&A says it logs people out of websites |
+| Files Cleanup: large files, duplicate files, downloaded files | Rejected: these are people's own files, and a reviewer found it easy to delete both copies of a duplicate. The spec also rules out a disk-usage map |
+| PowerToys items | Rejected: a power-user tool whose logs are usually small |
+| Prefetch | Already rejected (Windows manages it); not confirmed that PC Manager offers it |
+| Storage Sense shortcut | Already there: "Windows storage settings" in the `...` menu |
+| Boost (memory), startup apps, process manager, pop-up blocking, taskbar repair, default browser protection, health check | Out of scope: optimisers and startup managers, which the spec rules out |
+
 ## The look
 
 The first build looked flat on a real PC. The window now uses `MicaBackdrop` with
