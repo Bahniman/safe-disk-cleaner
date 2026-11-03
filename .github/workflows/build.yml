@@ -84,10 +84,15 @@ jobs:
         shell: pwsh
         run: |
           $missing = @("SafeDiskCleaner.exe", "SafeDiskCleaner.Core.dll", "Microsoft.WinUI.dll",
-                       "Microsoft.WindowsAppRuntime.dll", "resources.pri", "Assets\AppIcon.ico", "Assets\AppIcon.png") |
+                       "Microsoft.WindowsAppRuntime.dll", "Assets\AppIcon.ico", "Assets\AppIcon.png") |
                      Where-Object { -not (Test-Path (Join-Path $env:PUBLISH_DIR $_)) }
           if ($missing) { throw "Missing from the publish folder: $($missing -join ', ')" }
+          # The app's resource index (compiled XAML lives in it or next to it).
+          $pri = @("SafeDiskCleaner.pri", "resources.pri") | Where-Object { Test-Path (Join-Path $env:PUBLISH_DIR $_) }
+          if (-not $pri) { throw "No SafeDiskCleaner.pri or resources.pri in the publish folder" }
+          "Resource index: $($pri -join ', ')"
           $files = Get-ChildItem $env:PUBLISH_DIR -Recurse -File
+          "PRI and XBF files: " + (($files | Where-Object Extension -in '.pri', '.xbf' | ForEach-Object Name) -join ', ')
           "{0:N1} MB in {1} files" -f (($files | Measure-Object Length -Sum).Sum / 1MB), $files.Count
           (Get-Item (Join-Path $env:PUBLISH_DIR "SafeDiskCleaner.exe")).VersionInfo | Format-List FileVersion, ProductVersion
 

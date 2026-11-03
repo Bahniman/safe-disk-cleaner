@@ -183,7 +183,9 @@ public class EngineTests
         {
             foreach (Item it in r.Items.Where(i => i.Path is not null))
             {
-                Assert.Null(result.Guard.Check(it.Path!));
+                // Still allowed now (or deleted meanwhile by something else on the machine).
+                string? why = result.Guard.Check(it.Path!);
+                Assert.True(why is null or Guard.GoneAlready, $"{it.Path}: {why}");
             }
             Assert.DoesNotContain(r.Skipped, s => s.Why.StartsWith("scan error", StringComparison.Ordinal));
         }
