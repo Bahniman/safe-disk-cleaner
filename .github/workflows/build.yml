@@ -1,0 +1,160 @@
+name: Build
+
+# Restore, build, test, publish a self-contained win-x64 folder, start it once as a smoke
+# test, and upload SafeDiskCleaner-win-x64.zip as an artifact. release.yml reuses this.
+on:
+  push:
+    branches: ["**"]
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      version:
+        description: "Version to stamp into the build, for example v1.2.0"
+        type: string
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: true
+
+env:
+  DOTNET_NOLOGO: "true"
+  DOTNET_CLI_TELEMETRY_OPTOUT: "true"
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: "true"
+  APP_PROJECT: src/SafeDiskCleaner/SafeDiskCleaner.csproj
+  TEST_PROJECT: tests/SafeDiskCleaner.Core.Tests/SafeDiskCleaner.Core.Tests.csproj
+  PUBLISH_DIR: publish/SafeDiskCleaner
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Version
+        id: version
+        shell: pwsh
+        env:
+          RAW_VERSION: ${{ inputs.version }}
+        run: |
+          $v = "$env:RAW_VERSION".Trim().TrimStart('v')
+          if ($v -and $v -notmatch '^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$') { throw "Tag '$env:RAW_VERSION' is not a version like v1.2.3" }
+          $prop = if ($v) { "-p:Version=$v" } else { "" }
+          "prop=$prop" >> $env:GITHUB_OUTPUT
+          dotnet --info | Select-Object -First 12
+
+      - name: Restore
+        shell: pwsh
+        run: |
+          dotnet restore $env:TEST_PROJECT
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          dotnet restore $env:APP_PROJECT -r win-x64 -p:Platform=x64
+
+      - name: Build
+        shell: pwsh
+        run: |
+          dotnet build $env:TEST_PROJECT -c Release --no-restore ${{ steps.version.outputs.prop }}
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          dotnet build $env:APP_PROJECT -c Release -r win-x64 -p:Platform=x64 --no-restore ${{ steps.version.outputs.prop }}
+
+      - name: Test
+        shell: pwsh
+        run: >
+          dotnet test $env:TEST_PROJECT -c Release --no-build
+          --logger "console;verbosity=normal"
+          --logger "trx;LogFileName=results.trx"
+          --results-directory TestResults
+
+      - name: Publish (self-contained, win-x64)
+        shell: pwsh
+        run: >
+          dotnet publish $env:APP_PROJECT -c Release -r win-x64 -p:Platform=x64
+          --self-contained true ${{ steps.version.outputs.prop }} -o $env:PUBLISH_DIR
+
+      - name: Check the published folder
+        shell: pwsh
+        run: |
+          $missing = @("SafeDiskCleaner.exe", "SafeDiskCleaner.Core.dll", "Microsoft.WinUI.dll",
+                       "Microsoft.WindowsAppRuntime.dll", "resources.pri", "Assets\AppIcon.ico", "Assets\AppIcon.png") |
+                     Where-Object { -not (Test-Path (Join-Path $env:PUBLISH_DIR $_)) }
+          if ($missing) { throw "Missing from the publish folder: $($missing -join ', ')" }
+          $files = Get-ChildItem $env:PUBLISH_DIR -Recurse -File
+          "{0:N1} MB in {1} files" -f (($files | Measure-Object Length -Sum).Sum / 1MB), $files.Count
+          (Get-Item (Join-Path $env:PUBLISH_DIR "SafeDiskCleaner.exe")).VersionInfo | Format-List FileVersion, ProductVersion
+
+      - name: Smoke test (start the app, wait for its scan, screenshot, close)
+        shell: pwsh
+        run: |
+          $exe = Resolve-Path (Join-Path $env:PUBLISH_DIR "SafeDiskCleaner.exe")
+          $errLog = Join-Path $env:LOCALAPPDATA "SafeDiskCleaner\error.log"
+          Remove-Item $errLog -ErrorAction SilentlyContinue
+          $start = Get-Date
+          $p = Start-Process -FilePath $exe -PassThru
+          Start-Sleep -Seconds 30
+          $p.Refresh()
+          if ($p.HasExited) {
+            Write-Host "::error::The app exited after start with code $($p.ExitCode)"
+            if (Test-Path $errLog) { Get-Content $errLog }
+            Get-WinEvent -FilterHashtable @{ LogName = 'Application'; StartTime = $start } -ErrorAction SilentlyContinue |
+              Where-Object { $_.ProviderName -in 'Application Error', '.NET Runtime', 'Windows Error Reporting' } |
+              Select-Object -First 6 | Format-List TimeCreated, ProviderName, Message
+            exit 1
+          }
+          Write-Host "Running after 30 s. Main window handle: $($p.MainWindowHandle) title: '$($p.MainWindowTitle)'"
+          try {
+            Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+            $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+            $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
+            $g = [System.Drawing.Graphics]::FromImage($bmp)
+            $g.CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size)
+            New-Item -ItemType Directory -Force smoke | Out-Null
+            $bmp.Save((Join-Path (Get-Location) "smoke\screenshot.png"), [System.Drawing.Imaging.ImageFormat]::Png)
+            Write-Host "Screenshot $($b.Width)x$($b.Height) saved."
+          } catch {
+            Write-Host "::warning::No screenshot: $($_.Exception.Message)"
+          }
+          Stop-Process -Id $p.Id -Force
+          if (Test-Path $errLog) {
+            Write-Host "::error::The app wrote error.log during the smoke test:"
+            Get-Content $errLog
+            exit 1
+          }
+
+      - name: Zip
+        shell: pwsh
+        run: Compress-Archive -Path $env:PUBLISH_DIR -DestinationPath SafeDiskCleaner-win-x64.zip -CompressionLevel Optimal
+
+      - name: Upload SafeDiskCleaner-win-x64
+        uses: actions/upload-artifact@v7
+        with:
+          name: SafeDiskCleaner-win-x64
+          path: SafeDiskCleaner-win-x64.zip
+          if-no-files-found: error
+          compression-level: 0
+
+      - name: Upload smoke-test screenshot
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: smoke-test-screenshot
+          path: smoke/
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-results
+          path: TestResults/
+          if-no-files-found: ignore
+          retention-days: 14
