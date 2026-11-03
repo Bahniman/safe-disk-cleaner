@@ -76,9 +76,112 @@ Port these from `engine.py`, keeping names close so the two can be compared:
 |---|---|---|
 | Leftovers | on | NVIDIA driver copies (only versions at or below the installed driver from `nvidia-smi`), app `*-updater` installers, old Squirrel `app-*` versions and `.nupkg`s (Discord and similar), old Claude Code and Codex runtimes, npm/pip/uv/yarn caches, Comfy Desktop download cache, temp idle 7+ days, crash dumps, partial downloads 2+ days old, `node_modules` in projects idle 30+ days |
 | App and browser caches | on | Chromium/Electron `Cache`, `Code Cache`, `GPUCache`, Dawn caches, `Service Worker\CacheStorage` and `ScriptCache`, recognised by what is inside them (see `_is_chromium_cache`), for the apps in `APPS`; launcher caches in `LAUNCHERS`. Never `OptGuideOnDeviceModel` |
-| Your call | off | Recycle Bin (`SHQueryRecycleBinW`, `SHEmptyRecycleBinW`) |
-| Windows | on, needs admin | Windows Temp 7+ days, `SoftwareDistribution\Download` 10+ days, WER report folders, Delivery Optimization cache (`Delete-DeliveryOptimizationCache -Force`); DISM `/StartComponentCleanup` off by default |
-| Kept on purpose | shown, never cleaned | the `KEPT` list, so people see what is deliberately left alone |
+| Leftovers (added) | on | Explorer thumbnail cache (`thumbcache_*.db`), Windows' internet cache (`INetCache\IE` and `Low\IE` buckets), user WER reports idle 7+ days |
+| Your call | off | Recycle Bin (`SHQueryRecycleBinW`, `SHEmptyRecycleBinW`), DirectX shader cache (`%LOCALAPPDATA%\D3DSCache`), blue-screen memory dump (`%WINDIR%\*.dmp`, admin) |
+| Windows | on, needs admin | Windows Temp 7+ days, `SoftwareDistribution\Download` 10+ days, WER report folders, Delivery Optimization cache (`Delete-DeliveryOptimizationCache -Force`), old Windows logs, Windows diagnostic leftovers, Windows Update cleanup through Disk Cleanup's own handlers. Off by default: old driver versions, Windows.old, Windows ESD files. See "Disk Cleanup parity" |
+| Kept on purpose | shown, never cleaned | the `KEPT` list, so people see what is deliberately left alone, including the Downloads folder and File History versions that Disk Cleanup offers |
+
+## Disk Cleanup parity
+
+The owner asked for the app to be better than running Windows Disk Cleanup as
+admin: do everything it does, and keep clearing the app caches it never sees.
+Port `reference/engine.py` as it is now; it implements all of this.
+
+Disk Cleanup's categories live under
+`HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\VolumeCaches`, one
+subkey each. The app covers every category a stock Windows 11 PC lists, in
+one of three ways.
+
+1. **Its own rules, with the guard and real sizes**, for file-based
+   categories:
+   - Temporary Files, which also covers `Windows\Logs`, `System32\LogFiles`,
+     `SystemTemp`, `ProgramData\Microsoft\WDF` and `HiveUpload`. Delete files
+     idle 7+ days and leave every folder in place. Skip the `MeasuredBoot`
+     and `SystemRestore` subfolders.
+   - Thumbnail Cache and Internet Cache Files.
+   - Windows Error Reporting Files.
+   - Delivery Optimization Files and Recycle Bin.
+   - Windows Defender (`LocalCopy` and `Support`, files idle 7+ days; never
+     `Quarantine`).
+   - Feedback Hub Archive log files, Diagnostic Data Viewer database files and
+     RetailDemo Offline Content.
+   - Setup Log Files (`setup*.log` and the other names in `C:\Windows`, idle
+     30+ days) and Old ChkDsk Files (`C:\FOUND.000` to `.009`, `*.CHK` only).
+   - D3D Shader Cache (opt-in) and System error memory dump files (opt-in).
+2. **Windows' own handler**, for what only Windows can remove safely:
+   - Update Cleanup (the component store), Windows Upgrade Log Files,
+     Temporary Setup Files, Upgrade Discarded Files, Windows Reset Log Files,
+     Language Pack, Downloaded Program Files, Temporary Sync Files, Offline
+     Pages Files, Active Setup Temp Folders and Content Indexer Cleaner. All
+     of these are on by default.
+   - Previous Installations (Windows.old, off by default: it ends the 10-day
+     rollback) and Windows ESD installation files (off by default: Reset this
+     PC needs them). Show each row only when its folder exists.
+
+   How to run them:
+   1. Delete any `StateFlags0777` value under every VolumeCaches subkey, so a
+      crashed earlier run cannot widen this one.
+   2. Set `StateFlags0777` (DWORD 2) only on the ticked categories that exist.
+   3. Run `%WINDIR%\System32\cleanmgr.exe /sagerun:777` and wait. Allow up to
+      two hours.
+   4. Delete the values again in a `finally`.
+
+   Use `RegistryView.Registry64`. All ticked handler categories run in one
+   cleanmgr pass at the end of Clean. Their size is unknown until the run,
+   so show "Size shows after the run", and enable the Clean button whenever
+   any row is ticked, even at 0 bytes.
+3. **Deliberately left out**:
+   - DownloadsFolder (it empties the user's Downloads) and User file
+     versions (File History backups). List both under Kept on purpose.
+   - System error minidump files, which stay protected.
+
+**Old driver versions** match Disk Cleanup's "Device driver packages". The
+rule is off by default because a removed version can't be rolled back to.
+
+1. List third-party packages language-neutrally with the DISM API
+   (`DismGetDrivers`, for example through the `Microsoft.Dism` NuGet package;
+   check its current version). The reference parses `pnputil /enum-drivers`,
+   whose labels are English only.
+2. Group the packages by original INF name plus provider. Keep the newest
+   version, and any package that ties with it.
+3. Skip any package a device uses now. `InfPath` under each
+   `HKLM\SYSTEM\CurrentControlSet\Control\Class\{guid}\NNNN` subkey gives
+   the INFs in use.
+4. Size each package from `DriverStore\FileRepository\<Active>`, where
+   `Active` comes from `HKLM\DRIVERS\DriverDatabase\DriverInfFiles\oemNN.inf`.
+   That is the live database; fall back to `HKLM\SYSTEM\DriverDatabase`,
+   which is a stale copy.
+5. Delete with `pnputil /delete-driver oemNN.inf` and **no** `/force`, so
+   Windows itself refuses a package that is still in use. Report that as
+   "Windows kept it".
+
+On the reference PC the rule found 50 older packages, 739 MB in total, mostly
+superseded Wi-Fi driver versions. None of them was in use.
+
+**Guard changes.**
+- Add the folders above to `ALLOWED_ROOTS`. Each one is automatically in
+  `NEVER_EXACT`, so a root itself is never deleted.
+- Loose files in `C:\Windows` pass only through `ALLOWED_FILES`: a name
+  pattern matched against the file name, for a file directly in that folder.
+  Never use a glob on the full path: `C:\Windows\*.dmp` would match
+  `C:\Windows\Minidump\x.dmp`.
+- `D3DSCache` leaves `PROTECTED`. The NVIDIA shader caches stay.
+
+**Tests to add.**
+- `ALLOWED_FILES` allows `C:\Windows\MEMORY.DMP` and `C:\Windows\setupact.log`.
+  It refuses `C:\Windows\Minidump\x.dmp`, `C:\Windows\System32\x.dmp`,
+  `C:\Windows\Logs\setup.log` and `C:\Windows\explorer.exe`.
+- The guard refuses `C:\Windows\Logs` itself, `C:\Windows\System32`, and
+  `C:\Windows\System32\LogFiles\..\config`.
+- The handler runner clears stale flags first. Test it behind an interface
+  with a fake registry.
+- Driver grouping keeps the newest version and every tie, and skips in-use
+  INFs. Use a canned package list.
+
+**UI.** Under the title, add "Covers what Windows Disk Cleanup does, plus app
+caches it never sees." The Windows group's subtitle reads "What Disk Cleanup's
+system-file mode clears." The Clean dialog adds "Windows' own Disk Cleanup runs
+too and can take 10+ minutes" when a handler row is ticked.
 
 Add, if cheap and clearly safe: Brave, Opera, Slack, Teams (new), Spotify,
 Cursor and Windsurf cache roots, using the same signature check. Do not add
@@ -103,9 +206,9 @@ driver leftovers, Windows Update). Add a rule only if it passes all four:
 4. explainable in one line a non-technical friend understands.
 
 Record every candidate you rejected and why in `docs/DECISIONS.md` (for
-example: Windows.old needs TrustedInstaller ownership, so point to Windows
-Settings instead; Steam partial downloads may be resumed; DirectX shader caches
-make games stutter). Small, cheap features worth considering:
+example: Steam partial downloads may be resumed; registry cleaning has no
+measurable benefit). Windows.old and the DirectX shader cache are no longer
+rejections: see "Disk Cleanup parity". Small, cheap features worth considering:
 
 - an "Open Windows storage settings" link (`ms-settings:storagesense`) for what
   Windows cleans better itself (Windows.old, previous updates),
@@ -124,8 +227,9 @@ It should look like a first-party Windows 11 app, not a port.
 - Mica backdrop, extended custom title bar with app icon and title, light and
   dark following the system theme. Fluent defaults; accent colour from the
   system.
-- Header: app name, a one-line promise ("Clears caches and leftovers. Installed
-  tools, models and your files are never touched."), and drive usage for the
+- Header: app name, a two-line promise ("Covers what Windows Disk Cleanup does,
+  plus app caches it never sees." / "Installed tools, models and your files are
+  never touched."), and drive usage for the
   system drive as a `ProgressBar` plus "416.9 GB free of 932.5 GB". A drive
   picker is optional.
 - An `InfoBar` shows admin state: informational when standard, with a "Restart

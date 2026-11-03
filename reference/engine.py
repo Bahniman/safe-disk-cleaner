@@ -1,5 +1,8 @@
 """Reference engine for Safe Disk Cleaner (Python, tested on one Windows 11 PC).
 
+Covers what Windows Disk Cleanup does (its system-file mode included), plus
+the app caches it never sees.
+
 The WinUI app in src/ ports these rules and the guard to C#. CLI:
     python cleaner.py scan [--json]
     python cleaner.py clean [--tier safe|ask|admin|all] [--rules id,id] [--dry-run]
@@ -13,6 +16,7 @@ Stdlib only; Pillow is used for --snapshot when present.
 """
 import csv
 import ctypes
+import fnmatch
 import glob
 import json
 import os
@@ -166,14 +170,28 @@ PROTECTED_PATTERNS = [
     r"{H}\CrossDevice", r"{H}\OneDrive", r"{H}\OneDrive *", r"{H}\.ssh", r"{H}\.gnupg",
     # installed tools and installer databases
     r"{L}\Microsoft\WinGet", r"{L}\Programs", r"{L}\Package Cache", r"{P}\Package Cache", r"{W}\Installer",
-    # crash dumps, game shader caches, Chrome's on-device AI model
-    r"{W}\Minidump", r"{W}\LiveKernelReports", r"{L}\NVIDIA", r"{H}\AppData\LocalLow\NVIDIA", r"{L}\D3DSCache",
+    # crash dumps, NVIDIA shader caches, Chrome's on-device AI model. The DirectX
+    # shader cache is an opt-in rule instead, as in Disk Cleanup.
+    r"{W}\Minidump", r"{W}\LiveKernelReports", r"{L}\NVIDIA", r"{H}\AppData\LocalLow\NVIDIA",
     r"{L}\Google\Chrome\User Data\OptGuideOnDeviceModel",
 ]
 
+FOUND_DIRS = [rf"C:\FOUND.{i:03d}" for i in range(10)]  # old ChkDsk fragments
+
 ALLOWED_ROOTS = [HOME, os.path.join(PD, "NVIDIA Corporation"), r"C:\Temp",
                  os.path.join(WIN, "Temp"), os.path.join(WIN, "SoftwareDistribution", "Download"),
-                 os.path.join(PD, "Microsoft", "Windows", "WER")]
+                 os.path.join(PD, "Microsoft", "Windows", "WER"),
+                 # folders Windows Disk Cleanup also clears
+                 os.path.join(WIN, "Logs"), os.path.join(WIN, "System32", "LogFiles"), os.path.join(WIN, "SystemTemp"),
+                 os.path.join(PD, "Microsoft", "WDF"), os.path.join(PD, "Microsoft", "Windows", "HiveUpload"),
+                 os.path.join(PD, "Microsoft", "Windows Defender", "LocalCopy"),
+                 os.path.join(PD, "Microsoft", "Windows Defender", "Support"),
+                 os.path.join(PD, "Microsoft", "Diagnosis", "FeedbackArchive"),
+                 os.path.join(PD, "Microsoft", "Diagnosis", "EventTranscript"),
+                 os.path.join(PD, "Microsoft", "Windows", "RetailDemo")] + FOUND_DIRS
+
+# loose files directly inside the Windows folder that Disk Cleanup also clears, never in its subfolders
+ALLOWED_FILES = [(WIN, ("*.dmp", "setup*.log", "setup*.old", "setuplog.txt", "winnt32.log"))]
 
 NEVER_EXACT = [HOME, LOCAL, ROAMING, TEMP, os.path.join(HOME, "AppData"), os.path.join(HOME, "Downloads"),
                os.path.join(HOME, "Documents"), os.path.join(HOME, "Desktop"), os.path.join(HOME, "source"),
@@ -182,6 +200,12 @@ NEVER_EXACT = [HOME, LOCAL, ROAMING, TEMP, os.path.join(HOME, "AppData"), os.pat
 
 def _expand(pat):
     return pat.format(H=HOME, L=LOCAL, R=ROAMING, P=PD, W=WIN)
+
+
+def _allowed_file(path):
+    """True for a file name ALLOWED_FILES lists, sitting directly in its folder."""
+    d, name = os.path.split(nc(path))
+    return any(d == nc(base) and any(fnmatch.fnmatch(name, p) for p in pats) for base, pats in ALLOWED_FILES)
 
 
 def _reg_values(hive, key, name):
@@ -248,6 +272,8 @@ class Guard:
         if any(nc(path) == nc(r) for r in NEVER_EXACT):
             return "top-level folder"
         root = next((r for r in ALLOWED_ROOTS if under(path, r)), None)
+        if root is None and os.path.isfile(path) and _allowed_file(path):
+            root = os.path.dirname(path)
         if root is None:
             return "outside the folders this tool may touch"
         # no junction or symlink anywhere between the allowed root and the target
@@ -268,8 +294,9 @@ class Guard:
 # ---------------------------------------------------------------- rules
 
 class Item:
-    def __init__(self, path=None, label=None, action=None, size=None):
-        self.path, self.action = path, action
+    """A path to delete, or a path-less action. handler names a Disk Cleanup category run by Windows itself."""
+    def __init__(self, path=None, label=None, action=None, size=None, handler=None):
+        self.path, self.action, self.handler = path, action, handler
         self.label = label or path
         self.size = size
         self.result = None
@@ -529,7 +556,21 @@ def f_temp(ctx, r):
     for f in g(LOCAL, "CrashDumps", "*"):
         if idle_days(f) > 1:
             yield Item(f)
+    for d in g(LOCAL, "Microsoft", "Windows", "WER", "*", "*"):
+        if idle_days(d, deep=True) > 7:
+            yield Item(d, f"error report {os.path.basename(d)[:40]}")
 
+
+def f_thumbnails(ctx, r):
+    for f in g(LOCAL, "Microsoft", "Windows", "Explorer", "thumbcache_*.db"):
+        yield Item(f, f"Explorer {os.path.basename(f)}")
+
+
+def f_inetcache(ctx, r):
+    base = os.path.join(LOCAL, "Microsoft", "Windows", "INetCache")
+    for d in g(base, "IE", "*") + g(base, "Low", "IE", "*"):
+        if os.path.isdir(d):
+            yield Item(d, "Internet cache " + os.path.relpath(d, base))
 
 def _walk_dirs(roots, skip_names=(".git", "node_modules", "AppData", ".venv", "venv")):
     for root in roots:
@@ -612,10 +653,200 @@ def f_delivery_opt(ctx, r):
                    action=lambda: _ps("Delete-DeliveryOptimizationCache -Force"))
 
 
-def f_component_store(ctx, r):
-    yield Item(label="Windows component store cleanup (DISM, takes 10+ minutes)", size=None,
-               action=lambda: subprocess.run(["dism", "/Online", "/Cleanup-Image", "/StartComponentCleanup"],
-                                             capture_output=True, timeout=3600, creationflags=NOWIN))
+def _old_files(base, days, skip_dirs=()):
+    """Files under base untouched for `days`. Folders stay, so the services that write them still find them."""
+    for dp, dirs, files in os.walk(base):
+        dirs[:] = [d for d in dirs if not is_link(os.path.join(dp, d)) and d.lower() not in skip_dirs]
+        for f in files:
+            p = os.path.join(dp, f)
+            if idle_days(p) > days:
+                yield p
+
+
+def f_win_logs(ctx, r):
+    # measured-boot logs back TPM health checks and SystemRestore logs explain restore points: kept to be safe
+    for base in (os.path.join(WIN, "Logs"), os.path.join(WIN, "System32", "LogFiles")):
+        for p in _old_files(base, 7, skip_dirs=("measuredboot", "systemrestore")):
+            yield Item(p, os.path.relpath(p, WIN))
+    for base in (os.path.join(WIN, "SystemTemp"), os.path.join(PD, "Microsoft", "WDF"),
+                 os.path.join(PD, "Microsoft", "Windows", "HiveUpload")):
+        for e in g(base, "*"):
+            if idle_days(e, deep=True) > 7:
+                yield Item(e)
+
+
+def f_win_diag(ctx, r):
+    for base in (os.path.join(PD, "Microsoft", "Diagnosis", "FeedbackArchive"),
+                 os.path.join(PD, "Microsoft", "Diagnosis", "EventTranscript"),
+                 os.path.join(PD, "Microsoft", "Windows", "RetailDemo")):
+        for e in g(base, "*"):
+            yield Item(e)
+    for base in (os.path.join(PD, "Microsoft", "Windows Defender", "LocalCopy"),
+                 os.path.join(PD, "Microsoft", "Windows Defender", "Support")):
+        for p in _old_files(base, 7):
+            yield Item(p, "Defender " + os.path.relpath(p, os.path.dirname(base)))
+    for pat in ("setup*.log", "setup*.old", "setuplog.txt", "winnt32.log"):
+        for p in g(WIN, pat):
+            if os.path.isfile(p) and idle_days(p) > 30:
+                yield Item(p)
+    for d in FOUND_DIRS:
+        for f in g(d, "*.CHK"):
+            yield Item(f, "old ChkDsk fragment " + os.path.relpath(f, "C:\\"))
+
+
+def f_shader_cache(ctx, r):
+    for e in g(LOCAL, "D3DSCache", "*"):
+        yield Item(e)
+
+
+def f_memory_dump(ctx, r):
+    for p in g(WIN, "*.dmp"):
+        if not is_admin():
+            r.skipped.append((p, "needs admin"))
+        else:
+            yield Item(p, f"{os.path.basename(p)} from {time.strftime('%d %b %Y', time.localtime(mtime(p)))}")
+
+
+# old driver packages, the way Disk Cleanup's "Device driver packages" does it
+def _driver_packages():
+    """pnputil's driver list as dicts. Its labels are English, so other languages find nothing (safe)."""
+    out = subprocess.run(["pnputil", "/enum-drivers"], capture_output=True, text=True, timeout=120,
+                         creationflags=NOWIN).stdout
+    pkgs, cur = [], {}
+    for line in out.splitlines() + [""]:
+        if ":" in line:
+            k, v = line.split(":", 1)
+            cur[k.strip()] = v.strip()
+        elif not line.strip() and cur:
+            pkgs.append(cur)
+            cur = {}
+    return [p for p in pkgs if p.get("Published Name", "").lower().startswith("oem")]
+
+
+def _infs_in_use():
+    """oemNN.inf names a device is installed with right now."""
+    key, used = r"SYSTEM\CurrentControlSet\Control\Class", set()
+    try:
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, key) as k:
+            for i in range(winreg.QueryInfoKey(k)[0]):
+                cls = winreg.EnumKey(k, i)
+                try:
+                    with winreg.OpenKey(k, cls) as ck:
+                        for j in range(winreg.QueryInfoKey(ck)[0]):
+                            sub = winreg.EnumKey(ck, j)
+                            used.update(v.lower() for v in _reg_values(winreg.HKEY_LOCAL_MACHINE, rf"{key}\{cls}\{sub}", "InfPath"))
+                except OSError:
+                    pass
+    except OSError:
+        pass
+    return used
+
+
+def _delete_driver(oem):
+    # no /force: Windows itself refuses a package a device still uses
+    res = subprocess.run(["pnputil", "/delete-driver", oem], capture_output=True, text=True, timeout=300,
+                         creationflags=NOWIN)
+    if res.returncode:
+        raise RuntimeError("Windows kept it (still in use)")
+
+
+def f_old_drivers(ctx, r):
+    pkgs = _driver_packages()
+    if not pkgs:
+        r.skipped.append(("driver list", "pnputil gave no list"))
+        return
+    used, store = _infs_in_use(), os.path.join(WIN, "System32", "DriverStore", "FileRepository")
+    groups = {}
+    for p in pkgs:
+        p["ver"] = vkey((p.get("Driver Version") or "0").split()[-1])
+        groups.setdefault((p.get("Original Name", "").lower(), p.get("Provider Name", "")), []).append(p)
+    for (name, _), ps in groups.items():
+        newest = max(p["ver"] for p in ps)
+        for p in ps:
+            oem, ver = p["Published Name"], ".".join(map(str, p["ver"]))
+            if p["ver"] >= newest:  # the newest, and any package that ties with it, stay
+                continue
+            if oem.lower() in used:
+                r.skipped.append((f"{name} {ver}", "a device still uses it"))
+                continue
+            # the live database is the DRIVERS hive; SYSTEM\DriverDatabase holds an older copy
+            pkg = [v for db in (r"DRIVERS\DriverDatabase", r"SYSTEM\DriverDatabase")
+                   for v in _reg_values(winreg.HKEY_LOCAL_MACHINE, rf"{db}\DriverInfFiles\{oem}", "Active") if v]
+            size = tree_size(os.path.join(store, pkg[0])) if pkg else None
+            yield Item(label=f"{name} {ver} ({oem}; keeps {'.'.join(map(str, newest))})", size=size,
+                       action=lambda oem=oem: _delete_driver(oem))
+
+
+# Windows' own Disk Cleanup handlers, for what only Windows can remove safely (component store, Windows.old)
+VOLUME_CACHES = r"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\VolumeCaches"
+SAGE = 777  # the cleanmgr /sagerun slot this app uses; its flags are removed after every run
+
+WIN_HANDLERS = [  # category, what it is
+    ("Update Cleanup", "Superseded Windows Update files"),
+    ("Windows Upgrade Log Files", "Logs from past Windows upgrades"),
+    ("Temporary Setup Files", "Files Windows setup left behind"),
+    ("Upgrade Discarded Files", "Files a past upgrade set aside"),
+    ("Windows Reset Log Files", "Logs from past resets"),
+    ("Language Pack", "Language resources no account here uses"),
+    ("Downloaded Program Files", "Old ActiveX controls and Java applets"),
+    ("Temporary Sync Files", "Leftover sync scratch files"),
+    ("Offline Pages Files", "Old offline web pages"),
+    ("Active Setup Temp Folders", "Old component setup scratch"),
+    ("Content Indexer Cleaner", "Old search indexer files"),
+]
+
+
+def _handler_exists(name):
+    try:
+        winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, VOLUME_CACHES + "\\" + name).Close()
+        return True
+    except OSError:
+        return False
+
+
+def run_handlers(names):
+    """Run Windows' own Disk Cleanup for exactly these categories, then remove the flags again."""
+    flag, acc = f"StateFlags{SAGE:04d}", winreg.KEY_SET_VALUE | winreg.KEY_WOW64_64KEY
+
+    def set_flag(cat, on):
+        try:
+            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, VOLUME_CACHES + "\\" + cat, 0, acc) as k:
+                if on:
+                    winreg.SetValueEx(k, flag, 0, winreg.REG_DWORD, 2)
+                else:
+                    winreg.DeleteValue(k, flag)
+        except FileNotFoundError:
+            pass
+    with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, VOLUME_CACHES) as k:
+        cats = [winreg.EnumKey(k, i) for i in range(winreg.QueryInfoKey(k)[0])]
+    for c in cats:  # a crashed earlier run must not widen this one: the Downloads folder is a category too
+        set_flag(c, False)
+    try:
+        for n in names:
+            set_flag(n, True)
+        subprocess.run([os.path.join(WIN, "System32", "cleanmgr.exe"), f"/sagerun:{SAGE}"], timeout=7200)
+    finally:
+        for n in names:
+            set_flag(n, False)
+
+
+def f_win_update(ctx, r):
+    for name, what in WIN_HANDLERS:
+        if _handler_exists(name):
+            yield Item(label=f"{what} ({name})", handler=name)
+
+
+def f_win_old(ctx, r):
+    d = r"C:\Windows.old"
+    if os.path.isdir(d) and _handler_exists("Previous Installations"):
+        yield Item(label="Windows.old, your previous Windows", size=tree_size(d), handler="Previous Installations")
+
+
+def f_win_esd(ctx, r):
+    ds = [d for d in (r"C:\ESD", r"C:\$Windows.~WS") if os.path.isdir(d)]
+    if ds and _handler_exists("Windows ESD installation files"):
+        yield Item(label="Windows installation files (ESD)", size=sum(tree_size(d) for d in ds),
+                   handler="Windows ESD installation files")
 
 
 def build_rules():
@@ -634,13 +865,22 @@ def build_rules():
         rules.append(Rule("launcher-" + label.split()[0].lower(), "apps", label,
                           "Launcher cache, rebuilt on next start", make_launcher_finder(label, pats, names)))
     rules += [
-        Rule("temp", "safe", "Old temp files", "Temp files and crash dumps untouched for a week, plus old agent and LibreOffice scratch.", f_temp),
+        Rule("temp", "safe", "Old temp files", "Temp files, crash dumps and error reports untouched for a week, plus old agent and LibreOffice scratch.", f_temp),
+        Rule("thumbnails", "safe", "Thumbnail cache", "Picture previews Explorer saved. It redraws them as you browse.", f_thumbnails),
+        Rule("inet-cache", "safe", "Internet cache files", "Windows' own web cache, used by older apps and Office.", f_inetcache),
         Rule("partial", "safe", "Unfinished downloads", "Partial downloads (.crdownload, .part) left in Downloads or Desktop for 2+ days.", f_partial),
         Rule("node-modules", "safe", "Idle node_modules", "Dependencies of projects untouched for 30 days. npm install brings them back.", f_node_modules),
         Rule("recycle", "ask", "Recycle Bin", "Empties it for good.", f_recycle),
+        Rule("shader-cache", "ask", "DirectX shader cache", "Games rebuild it, but stutter for a while after.", f_shader_cache),
+        Rule("memory-dump", "ask", "Blue-screen memory dump", "Full crash dump. Keep it while you are still fixing crashes.", f_memory_dump),
         Rule("win-temp", "admin", "Windows temp and update leftovers", "Windows Temp, old Windows Update downloads and error reports.", f_win_temp, admin=True),
         Rule("delivery-opt", "admin", "Delivery Optimization cache", "Update pieces Windows keeps to share with other PCs.", f_delivery_opt, admin=True),
-        Rule("dism", "admin", "Windows component store", "Removes superseded Windows update files. Slow; run now and then.", f_component_store, checked=False, admin=True),
+        Rule("win-logs", "admin", "Old Windows log files", "Logs Windows wrote more than a week ago, plus its system temp folder. Folders stay.", f_win_logs, admin=True),
+        Rule("win-diag", "admin", "Windows diagnostic leftovers", "Feedback Hub archives, old setup logs, Defender's non-critical files, ChkDsk fragments.", f_win_diag, admin=True),
+        Rule("win-update", "admin", "Windows Update cleanup", "Superseded update files and setup leftovers, removed by Windows' own Disk Cleanup. Size shows after the run.", f_win_update, admin=True),
+        Rule("old-drivers", "admin", "Old driver versions", "Older copies of drivers a newer version replaced. You can't roll those drivers back after.", f_old_drivers, checked=False, admin=True),
+        Rule("win-old", "admin", "Previous Windows installation", "Lets you go back to your old Windows for 10 days after an upgrade.", f_win_old, checked=False, admin=True),
+        Rule("win-esd", "admin", "Windows installation files", "Needed for Reset this PC without a download. Keep unless space is desperate.", f_win_esd, checked=False, admin=True),
     ]
     return rules
 
@@ -649,9 +889,11 @@ KEPT = [
     ("Claude desktop VM (vm_bundles)", "Claude's local VM runs on it"),
     ("Ollama, LM Studio and Hugging Face models", "Re-downloading costs hours"),
     ("WinGet tools, Programs, PATH folders", "Installed tools such as ffmpeg and uv"),
-    ("Game shader caches (NVIDIA, D3D)", "Games stutter while they rebuild"),
+    ("NVIDIA shader caches", "Games stutter while they rebuild. The DirectX one is under Your call"),
     ("Chrome on-device AI model", "Chrome features use it"),
-    ("Windows crash dumps", "Needed to diagnose blue screens"),
+    ("Windows minidumps", "Needed to diagnose blue screens"),
+    ("Your Downloads folder", "Windows Disk Cleanup offers to empty it. This app never will"),
+    ("File History versions", "Your backups. Disk Cleanup lists them; this app leaves them"),
     ("OneDrive, CrossDevice, .ssh", "Synced or personal files"),
 ]
 
@@ -680,10 +922,10 @@ def scan(admin=None, progress=None):
                     continue
             r.items.append(it)
         with ThreadPoolExecutor(8) as ex:
-            sizes = list(ex.map(lambda it: it.size if it.action else tree_size(it.path), r.items))
+            sizes = list(ex.map(lambda it: it.size if it.path is None else tree_size(it.path), r.items))
         for it, s in zip(r.items, sizes):
             it.size = s
-        r.items = [it for it in r.items if it.action or it.size]
+        r.items = [it for it in r.items if it.path is None or it.size]
     return rules, guard
 
 
@@ -708,7 +950,10 @@ def clean(rules, guard, dry_run=False, progress=None):
     """Delete the items of the given rules. Returns bytes freed (measured on the drive)."""
     before = free_bytes()
     rows, items = [], [(r, it) for r in rules for it in r.items]
+    handlers = [(r, it) for r, it in items if it.handler]
     for n, (r, it) in enumerate(items):
+        if it.handler:
+            continue  # Windows runs these together below, in one Disk Cleanup pass
         if progress:
             progress(n, len(items), it.label)
         if dry_run:
@@ -731,6 +976,19 @@ def clean(rules, guard, dry_run=False, progress=None):
                 left = tree_size(it.path) if os.path.lexists(it.path) else 0
                 it.result = "deleted" if not left else f"partly in use, {fmt(left)} left"
         rows.append([time.strftime("%Y-%m-%d %H:%M:%S"), r.id, it.path or it.label, it.size or 0, it.result])
+    if handlers:
+        if progress:
+            progress(len(items) - 1, len(items), "Windows Disk Cleanup is running (Update Cleanup can take 10+ minutes)")
+        res = "dry run"
+        if not dry_run:
+            try:
+                run_handlers([it.handler for _, it in handlers])
+                res = "done by Windows"
+            except Exception as ex:
+                res = f"failed: {ex}"
+        for r, it in handlers:
+            it.result = res
+            rows.append([time.strftime("%Y-%m-%d %H:%M:%S"), r.id, it.label, it.size or 0, res])
     freed = free_bytes() - before
     if not dry_run and rows:
         new = not os.path.exists(LOG_CSV)
@@ -769,8 +1027,10 @@ def cli(argv):
     if cmd == "clean":
         tier = argv[argv.index("--tier") + 1] if "--tier" in argv else None
         ids = argv[argv.index("--rules") + 1].split(",") if "--rules" in argv else None
-        pick = [r for r in rules if (ids and r.id in ids) or (not ids and (tier == "all" or r.tier == tier
-                                                                         or (tier is None and r.checked)))]
+        # a tier takes its ticked rules; "ask" rules start unticked, so that tier takes them all.
+        # Off-by-default Windows rules (old drivers, Windows.old, ESD) run only when named with --rules.
+        pick = [r for r in rules if (ids and r.id in ids) or (not ids and (r.checked or r.tier == "ask") and (
+            tier == "all" or r.tier == tier or (tier is None and r.checked)))]
         freed = clean(pick, guard, dry_run="--dry-run" in argv)
         for r in pick:
             for it in r.items:
@@ -833,8 +1093,10 @@ def run_ui(snapshot=None):
     left = tk.Frame(head, bg=BG)
     left.pack(side="left", fill="x", expand=True)
     tk.Label(left, text="Disk Cleaner", font=HEAD, bg=BG, fg=INK).pack(anchor="w")
-    tk.Label(left, text="Clears caches and leftovers. Installed tools, models and your files are never touched.",
+    tk.Label(left, text="Covers what Windows Disk Cleanup does, plus app caches it never sees.",
              font=FONT, bg=BG, fg=MUTED).pack(anchor="w", pady=(px(2), 0))
+    tk.Label(left, text="Installed tools, models and your files are never touched.",
+             font=FONT, bg=BG, fg=MUTED).pack(anchor="w")
     right = tk.Frame(head, bg=BG)
     right.pack(side="right", anchor="n")
     badge = tk.Label(right, text=" ADMIN " if admin else " STANDARD ", font=("Segoe UI Variable Text", 8, "bold"),
@@ -897,15 +1159,16 @@ def run_ui(snapshot=None):
     TIERS = [("safe", "Leftovers", "Nothing uses these any more"),
              ("apps", "App and browser caches", "Logins and settings stay. An open app is skipped."),
              ("ask", "Your call", "Unchecked until you tick them"),
-             ("admin", "Windows", "Windows' own leftovers")]
+             ("admin", "Windows", "What Disk Cleanup's system-file mode clears")]
 
     def selected_total():
         return sum(r.total for r in state["rules"] if state["checked"].get(r.id) and r.items)
 
     def refresh_go():
         t = selected_total()
+        some = any(state["checked"].get(r.id) and r.items for r in state["rules"])
         go.config(text=f"Clean selected  ·  {fmt(t)}" if t else "Clean selected")
-        go.state(["!disabled"] if t and not state["busy"] else ["disabled"])
+        go.state(["!disabled"] if some and not state["busy"] else ["disabled"])
 
     def populate():
         tree.delete(*tree.get_children())
@@ -1024,8 +1287,10 @@ def run_ui(snapshot=None):
     def do_clean():
         pick = [r for r in state["rules"] if state["checked"].get(r.id) and r.items]
         n = sum(len(r.items) for r in pick)
+        win = any(it.handler for r in pick for it in r.items)
+        note = "\n\nWindows' own Disk Cleanup runs too and can take 10+ minutes." if win else ""
         if not pick or not messagebox.askyesno(
-                "Clean selected", f"Delete {n} items, about {fmt(selected_total())}?\n\nThis can't be undone.", parent=root):
+                "Clean selected", f"Delete {n} items, about {fmt(selected_total())}?{note}\n\nThis can't be undone.", parent=root):
             return
         busy(True, "Cleaning…")
 
