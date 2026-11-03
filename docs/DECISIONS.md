@@ -118,8 +118,13 @@ Every difference makes the app more careful, not less:
   `global.json`, and is worth doing before a public release.
 - **Windows App SDK 1.8.260921001**, the newest stable 1.x on NuGet when this was built, as
   the spec asks ("latest stable 1.x"). NuGet also has a 2.x line (2.6.5 was published the
-  same day this was built). Moving to it is a one-line change in
+  same day this was built). Moving to it is a small change in
   `src/SafeDiskCleaner/SafeDiskCleaner.csproj`, but it should be tested on a real PC first.
+- **Component packages instead of the metapackage**: the app references the Windows App SDK
+  components it uses (Runtime, Foundation, InteractiveExperiences, WinUI, DWrite) at the
+  exact versions the 1.8.260921001 metapackage pins. Windows ML (`onnxruntime.dll`,
+  `DirectML.dll`), Windows AI and Widgets are left out, which keeps about 45 MB of unused
+  files out of the download. The csproj says how to switch back.
 
 ## Not verified
 
