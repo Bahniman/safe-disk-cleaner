@@ -32,10 +32,19 @@ for a while after), and the big blue-screen memory dump (`MEMORY.DMP`, admin).
 **Windows**, only when run as admin, the same things Disk Cleanup's "Clean up system files"
 mode clears: Windows' temp folder, old Windows Update downloads, error reports, the Delivery
 Optimization cache, old Windows log files, diagnostic leftovers (Feedback Hub archives, old
-setup logs, Defender's non-critical files, ChkDsk fragments), and Windows Update cleanup,
-which Windows' own Disk Cleanup does for the app and can take 10+ minutes. Not ticked unless
-you choose: old driver versions, your previous Windows installation (Windows.old) and the
-Windows installation files that Reset this PC uses.
+setup logs, Defender's non-critical files, ChkDsk fragments), and Windows Update cleanup.
+
+Windows Update cleanup is done by Windows' own Disk Cleanup, which the app starts for you at
+the end of a clean. Its small window may appear while it works, it can take 10+ minutes, and
+its size shows only after the run ("Size shows after the run").
+
+Not ticked unless you choose:
+
+- **Old driver versions**: older copies of drivers that a newer version replaced. Windows
+  refuses to remove any a device still uses. You can't roll those drivers back afterwards.
+- **Previous Windows installation** (Windows.old): lets you go back to your old Windows for
+  10 days after an upgrade.
+- **Windows installation files**: Reset this PC uses them to reinstall without a download.
 
 ## What it never touches
 
@@ -43,8 +52,8 @@ Installed programs and command-line tools, anything on your PATH, local AI model
 LM Studio, Hugging Face), NVIDIA and AMD game shader caches, Windows minidumps, OneDrive and
 other synced folders, your Downloads folder and File History backups (Disk Cleanup offers
 both; this app never touches them), your Documents, Pictures, Music, Videos and game saves,
-and browser logins and history. The list
-at the bottom of the app, "Kept on purpose", shows this too.
+and browser logins and history. The "Kept on purpose" list at the bottom of the app shows
+this too.
 
 Why so strict? This tool started after a manual cleanup deleted
 `%LOCALAPPDATA%\Microsoft\WinGet\Packages` because it looked like a download cache. It is
@@ -60,7 +69,9 @@ shortcut-like link. It runs during the scan and again right before each delete.
 2. Unzip it anywhere you like, for example into your Documents or Desktop.
 3. Open the `SafeDiskCleaner` folder and double-click `SafeDiskCleaner.exe`.
 
-There is nothing to install, and it works on Windows 10 and 11 without anything else.
+There is nothing to install, and it works on Windows 10 (version 1809 or newer) and Windows 11
+without anything else. The download is about 100 MB because it carries everything it needs
+to run.
 
 **The blue "Windows protected your PC" box.** The app is not code-signed (signing costs
 money every year), so Windows SmartScreen warns about it the first time. Click
@@ -73,9 +84,10 @@ deleting, then tells you how much space was freed, measured on the drive itself.
 
 ## Do I need admin?
 
-No. Everything works without admin except the **Windows** group, which needs admin to read
-Windows' own folders. If you want that too, click **Restart as admin** at the top and say
-yes to the Windows prompt.
+No. Everything works without admin except the **Windows** group and the blue-screen memory
+dump, which need admin to reach Windows' own folders. Without admin those rows say "needs
+admin" and are skipped, never half-done. If you want them too, click **Restart as admin** at
+the top and say yes to the Windows prompt.
 
 ## Keeping a folder safe
 
@@ -135,7 +147,7 @@ dotnet publish src/SafeDiskCleaner/SafeDiskCleaner.csproj -c Release -r win-x64 
 |---|---|
 | `src/SafeDiskCleaner.Core` | Rules, the safety guard, scan, delete and log. No UI. |
 | `src/SafeDiskCleaner` | The WinUI 3 app (unpackaged, self-contained). |
-| `tests/SafeDiskCleaner.Core.Tests` | xUnit tests for the guard and the delete routine. |
+| `tests/SafeDiskCleaner.Core.Tests` | xUnit tests for the guard, the delete routine and the Disk Cleanup rules. |
 | `reference/engine.py` | The original Python engine the C# was ported from. |
 | `docs/SPEC.md` | The build spec. |
 | `docs/DECISIONS.md` | Which rules were added or rejected, and why. |
