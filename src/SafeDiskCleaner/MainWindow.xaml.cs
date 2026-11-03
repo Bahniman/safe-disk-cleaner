@@ -52,11 +52,11 @@ public sealed partial class MainWindow : Window
         WindowSizing.ResizeAndCenter(AppWindow, hwnd, 1280, 800);
 
         Activated += (_, e) => TitleBarText.Opacity = e.WindowActivationState == WindowActivationState.Deactivated ? 0.5 : 1.0;
-        RootGrid.SizeChanged += (_, e) => ApplyLayout(e.NewSize.Width);
+        RootGrid.SizeChanged += (_, e) => ApplyLayout(e.NewSize.Width, e.NewSize.Height);
         RootGrid.ActualThemeChanged += (_, _) => Render();
         RootGrid.Loaded += async (_, _) =>
         {
-            ApplyLayout(RootGrid.ActualWidth);
+            ApplyLayout(RootGrid.ActualWidth, RootGrid.ActualHeight);
             await ScanAsync();
         };
 
@@ -603,9 +603,14 @@ public sealed partial class MainWindow : Window
         NoticeInfoBar.IsOpen = true;
     }
 
-    private void ApplyLayout(double width)
+    private void ApplyLayout(double width, double height)
     {
         bool wide = width >= WideLayoutMinWidth;
+        if (!wide)
+        {
+            // Below the list: tall enough to read, never crowding the list on short windows.
+            DetailsRow.Height = new GridLength(Math.Clamp(height * 0.28, 140, 260));
+        }
         if (_wide == wide)
         {
             return;
@@ -616,14 +621,15 @@ public sealed partial class MainWindow : Window
             DetailsColumn.Width = new GridLength(380);
             DetailsRow.Height = new GridLength(0);
             BodyGrid.ColumnSpacing = 16;
+            BodyGrid.RowSpacing = 0;
             Grid.SetRow(DetailsPane, 0);
             Grid.SetColumn(DetailsPane, 1);
         }
         else
         {
             DetailsColumn.Width = new GridLength(0);
-            DetailsRow.Height = new GridLength(220);
             BodyGrid.ColumnSpacing = 0;
+            BodyGrid.RowSpacing = 12;
             Grid.SetRow(DetailsPane, 1);
             Grid.SetColumn(DetailsPane, 0);
         }
