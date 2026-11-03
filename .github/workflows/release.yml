@@ -1,8 +1,9 @@
 name: Release
 
-# On a v* tag: run the same build as build.yml, then attach SafeDiskCleaner-win-x64.zip to a
-# GitHub Release. The release is created as a draft so nothing is visible to anyone until
-# the owner reviews it and clicks Publish.
+# On a v* tag: run the same build as build.yml (tests and smoke test included), then publish a
+# GitHub Release with SafeDiskCleaner-win-x64.zip and its SHA-256. Only the owner pushes tags,
+# so a pushed tag is the decision to release. While the repo is private, only people with
+# access to it can see the release.
 on:
   push:
     tags: ["v*"]
@@ -31,7 +32,7 @@ jobs:
 
       - uses: softprops/action-gh-release@v3
         with:
-          draft: true
+          draft: false
           name: Safe Disk Cleaner ${{ github.ref_name }}
           fail_on_unmatched_files: true
           files: |
