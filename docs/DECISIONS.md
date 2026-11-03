@@ -164,8 +164,9 @@ Every difference makes the app more careful, not less:
   build used 1.8.260921001 (the spec said "latest stable 1.x"); the owner chose to move to the
   2.x line. The app's code compiled unchanged against 2.6.5. Note that 2.6.5 was published the
   same day this was built; if it misbehaves on a real PC, 2.6.4 is the previous release.
-- **Download size**: the zip is about 88 MB (about 215 MB unzipped), almost all of it the
-  bundled .NET and Windows App SDK runtimes, which is what lets it run on a PC with nothing
+- **Download size**: the zip is about 97 MB (about 232 MB unzipped) with .NET 10 and
+  Windows App SDK 2.6.5, up from 88 MB with .NET 8 and 1.8. Almost all of it is the bundled
+  .NET and Windows App SDK runtimes, which is what lets it run on a PC with nothing
   installed. The self-contained Windows App SDK copies its whole runtime, including Windows
   ML (`onnxruntime.dll`, `DirectML.dll`, about 40 MB) that this app never uses. Referencing
   only the WinUI, Foundation and related component packages was tried and did not drop
