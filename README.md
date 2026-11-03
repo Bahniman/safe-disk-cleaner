@@ -119,8 +119,8 @@ by design, but it comes with no warranty. Look over the list before you click
 
 ## For developers
 
-Requirements: Windows 10 or 11, the .NET 8 SDK, and Visual Studio 2022 (with the "WinUI
-application development" workload) if you want the designer. The Windows App SDK comes from
+Requirements: Windows 10 or 11, the .NET 10 SDK, and a current Visual Studio with the "WinUI
+application development" workload if you want the designer. The Windows App SDK comes from
 NuGet.
 
 ```bash

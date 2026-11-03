@@ -2,7 +2,7 @@
 
   <!-- Rules, guard, scan, delete and log. No UI. Ported from reference/engine.py. -->
   <PropertyGroup>
-    <TargetFramework>net8.0-windows</TargetFramework>
+    <TargetFramework>net10.0-windows</TargetFramework>
     <RootNamespace>SafeDiskCleaner.Core</RootNamespace>
     <AssemblyName>SafeDiskCleaner.Core</AssemblyName>
     <!-- Lets the library compile on a non-Windows machine for quick checks; it only runs on Windows. -->
