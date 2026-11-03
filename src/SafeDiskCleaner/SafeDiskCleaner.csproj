@@ -28,20 +28,9 @@
     <Content Include="Assets\AppIcon.png" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
-  <!--
-    Windows App SDK 1.8.260921001, the latest stable 1.x on NuGet when this was written
-    (spec: "latest stable 1.x"). Instead of the Microsoft.WindowsAppSDK metapackage, this
-    references the components the app uses, at the exact versions that metapackage pins.
-    That leaves out Windows ML (onnxruntime.dll, DirectML.dll), Windows AI and Widgets, which
-    would add about 45 MB to the zip for nothing. To go back to the metapackage, replace this
-    group with: <PackageReference Include="Microsoft.WindowsAppSDK" Version="1.8.260921001" />
-  -->
   <ItemGroup>
-    <PackageReference Include="Microsoft.WindowsAppSDK.Runtime" Version="1.8.260921001" />
-    <PackageReference Include="Microsoft.WindowsAppSDK.Foundation" Version="1.8.260803002" />
-    <PackageReference Include="Microsoft.WindowsAppSDK.InteractiveExperiences" Version="1.8.260708001" />
-    <PackageReference Include="Microsoft.WindowsAppSDK.WinUI" Version="1.8.260803003" />
-    <PackageReference Include="Microsoft.WindowsAppSDK.DWrite" Version="1.8.25122902" />
+    <!-- Latest stable 1.x on NuGet when this was written (spec: "latest stable 1.x"). -->
+    <PackageReference Include="Microsoft.WindowsAppSDK" Version="1.8.260921001" />
   </ItemGroup>
 
   <ItemGroup>
